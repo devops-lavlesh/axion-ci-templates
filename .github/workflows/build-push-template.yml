@@ -111,4 +111,4 @@ jobs:
       - name: Confirm published image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
-        run: echo "Successfully pushed: $IMAGE"
+        run: 'echo "Successfully pushed: $IMAGE"'
