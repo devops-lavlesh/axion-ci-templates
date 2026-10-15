@@ -1,0 +1,114 @@
+
+name: Reusable Docker Build and Push to ACR
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: "Name of the application image"
+        required: true
+        type: string
+
+      image_tag:
+        description: "Unique Docker image tag"
+        required: true
+        type: string
+
+      acr_name:
+        description: "Azure Container Registry resource name"
+        required: true
+        type: string
+
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+
+      AZURE_TENANT_ID:
+        required: true
+
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+    outputs:
+      image:
+        description: "Published container image"
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    name: Build and Push ${{ inputs.service }}
+    runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      # 1. Checkout the calling application repository
+      - name: Checkout application code
+        uses: actions/checkout@v4
+
+      # 2. Azure login using the caller's OIDC identity
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # 3. Verify Azure subscription context
+      - name: Verify Azure account
+        run: az account show --output table
+
+      # 4. Login to Azure Container Registry
+      - name: Login to ACR
+        env:
+          ACR_NAME: ${{ inputs.acr_name }}
+        run: |
+          set -euo pipefail
+          az acr login --name "$ACR_NAME"
+
+      # 5. Prepare immutable image tag
+      - name: Set image metadata
+        id: meta
+        env:
+          ACR_NAME: ${{ inputs.acr_name }}
+          SERVICE: ${{ inputs.service }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="${ACR_NAME}.azurecr.io/${SERVICE}:${IMAGE_TAG}"
+
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Image prepared: ${IMAGE}"
+
+      # 6. Build from the root-level Dockerfile
+      - name: Docker Build
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          docker build \
+            --pull \
+            --file Dockerfile \
+            --tag "$IMAGE" \
+            .
+
+      # 7. Push image to ACR
+      - name: Docker Push
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE"
+
+      # 8. Show published image reference
+      - name: Confirm published image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: echo "Successfully pushed: $IMAGE"
